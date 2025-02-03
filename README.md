@@ -26,3 +26,6 @@ But the Gaussian assumption only holds in linear cases, when the dynamical syste
 There is also a book: [Stochastic Methods for Modeling and Predicting Complex Dynamical Systems](https://link.springer.com/book/10.1007/978-3-031-22249-8) by Nan Chen  
 [Data Assimilation Foundamentals](https://link.springer.com/book/10.1007/978-3-030-96709-3)by Geir Evensen , Femke C. Vossepoel , Peter Jan van Leeuwen]  
 [Data Assimilation: A Mathematical Introduction](https://link.springer.com/book/10.1007/978-3-319-20325-6) by Kody Law , Andrew Stuart , Konstantinos Zygalakis
+
+### 1.3 Logs
+[Weekly update logs on Kalman Filters, RL, and the research problem](https://www.overleaf.com/read/bxhwdmhnvxvx#c892a3)
