@@ -38,13 +38,13 @@ L96 = L96(Nx=model_size)
 obs_density = 10 # observations are partial: uniformlly distributed for every 'obs_density' model grids 
 obs_error_var = 0.04 # observation error variance
 model_grids = np.arange(0, model_size)
-obs_grids = model_grids[model_grids % obs_density == 0]
+obs_grids = model_grids[model_grids % obs_density == 0] # 0, 10, 20, 30
 nobsgrid = len(obs_grids)
 
-R = np.mat(obs_error_var * np.eye(nobsgrid, nobsgrid))
+R = np.mat(obs_error_var * np.eye(nobsgrid, nobsgrid)) # Observation identity matrix scaled by obs_error_var
 
 # make observation operator H
-Hk = np.mat(np.zeros((nobsgrid, model_size)))
+Hk = np.mat(np.zeros((nobsgrid, model_size))) # Maps observation into the model?
 for iobs in range(0, nobsgrid):
     x1 = obs_grids[iobs] 
     Hk[iobs, x1] = 1.0
@@ -78,17 +78,17 @@ prior_err = np.zeros((ninf,nloc))
 analy_err = np.zeros((ninf,nloc))
 
 # tuning inflation and localization by grid search
-for iinf in range(ninf):
+for iinf in range(ninf): # only 1 pass
     inflation_value = inflation_values[iinf]
     print('inflation:',inflation_value)
     
-    for iloc in range(nloc):
-        localization_value = localization_values[iloc]
+    for iloc in range(nloc): # only 1 pass
+        localization_value = localization_values[iloc] # localization matrix cutoff distance
         print('localization:',localization_value)
 
-        CMat = np.mat(construct_GC(localization_value, model_size, obs_grids))
-        zens = np.mat(zics_total[ens_mem_beg: ens_mem_end, :])  # ensemble are drawn from ics set
-        zeakf_prior = np.zeros((model_size, nobstime))
+        CMat = np.mat(construct_GC(localization_value, model_size, obs_grids)) # Matrix used to "localize" Kalman gain matrix (restrict covariance, see yt video)
+        zens = np.mat(zics_total[ens_mem_beg: ens_mem_end, :])  # ensemble are drawn from ics set - this is our initial ensemble
+        zeakf_prior = np.zeros((model_size, nobstime)) # these four are for analysis purposes I think
         zeakf_analy = np.empty((model_size, nobstime))
         prior_spread = np.empty((model_size, nobstime))
         analy_spread = np.empty((model_size, nobstime))
@@ -99,17 +99,27 @@ for iinf in range(ninf):
             # EnKF step
             obsstep = iassim * obs_freq_timestep + 1
             zens = np.mat(zens)
-            zeakf_prior[:, iassim] = np.mean(zens, axis=0)  # prior ensemble mean
-            zobs = np.mat(zobs_total[iassim, :])
+            zeakf_prior[:, iassim] = np.mean(zens, axis=0)  # prior ensemble mean - this is our forecast (computed by taking the mean of the ensembles)
+            zobs = np.mat(zobs_total[iassim, :]) # get observation
 
             # inflation (Relaxaiton To Prior Perturbations)
-            ensmean = np.mean(zens, axis=0)
+            ensmean = np.mean(zens, axis=0) # forecast yet again
             ensp = zens - ensmean
-            zens = ensmean + ensp * inflation_value
-            
+            zens = ensmean + ensp * inflation_value # Increase the "spread" of the ensembles by a factor of inflation_value
+
             prior_spread[:, iassim] = np.std(zens, axis=0, ddof=1)
 
             # serial update
+            '''
+                ensemble_size:  # of ensemble elts
+                nobsgrid:       dim of observation vector
+                zens:           ensemble matrix (each row is an ensemble elt)
+                Hk:             observation matrix, maps observation vector to model
+                obs_error_var:  variance of observation (inherent)
+                localize:       flag for whether to do localization (prevent far-away data points from being correlated)
+                CMat:           Localization matrix (gets Hadamard'd with Kalman gain matrix)
+                zobs:           Our observation at this time step
+            '''
             zens = eakf(ensemble_size, nobsgrid, zens, Hk, obs_error_var, localize, CMat, zobs)
 
             # save analysis
