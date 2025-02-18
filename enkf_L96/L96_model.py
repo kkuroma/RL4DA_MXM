@@ -5,7 +5,7 @@ A code framework for Lorenz 96 system (https://en.wikipedia.org/wiki/Lorenz_96_m
 import numpy as np
 
 
-class KSE:
+class L96:
     def __init__(self, dt, Nx):
         # Intialize simulation Setting: time step dt, number of grids Nx, etc.
         self.Nx = Nx
