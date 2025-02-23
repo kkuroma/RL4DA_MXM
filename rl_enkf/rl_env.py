@@ -4,7 +4,7 @@ from enkf import eakf
 
 class RLEnv(gym.Env):
     def __init__(self, derivative_func, dt=0.1, state_dimension=None, observation_dimension=None, Nens=40, action_space=None, observation_space=None, H=None, noise=None, initial_condition=None,
-        initial_ensemble_noise=(None, None), termination_rule=None, ground_truth_forward=None):
+        initial_ensemble_noise=(None, None), termination_rule=None, ground_truth_forward=None, seed=None):
         super(RLEnv, self).__init__()
 
         self.dx = derivative_func # dx(x, t) is derivative at time t at pos x
@@ -28,6 +28,7 @@ class RLEnv(gym.Env):
 
         self.T = 0
         self.last_obs = None
+        self.seed = seed
 
     def step(self, action):
         H = self.observation_matrix
@@ -48,25 +49,28 @@ class RLEnv(gym.Env):
         ]
         forecast_mean = sum(priors) / self.ensemble_size
 
-        observation = H @ self.ground_truth + np.random.multivariate_normal(np.zeros(self.observation_dimension), self.noise_covariance)
+        observation = H @ self.ground_truth + self.np_random.multivariate_normal(np.zeros(self.observation_dimension), self.noise_covariance)
         error = H @ forecast_mean - observation # error between observation and prior
 
         # Construct input vector (ensembles + error between forecast and observation)
         input_vector = np.concat((error, np.concat(self.ensembles)))
+        #input_vector = np.concat((error, np.concat(priors)))
         self.T += self.dt
 
-        return input_vector, -rmse, self.termination_rule(self.T, self.ensembles), False, {}
+        return input_vector, -rmse, self.termination_rule(self.T, self.ensembles), False, self.__get_info()
 
     def reset(self, seed=None, **kwargs):
+        if not self.seed:
+            super().reset(seed=seed)
+        else:
+            super().reset(seed=self.seed)
+
         ensemble_mean, ensemble_covariance = self.initial_ensemble_noise
         H = self.observation_matrix
 
-        if seed:
-            np.random.seed(seed)
-
         # initial condition
         self.ground_truth = self.initial_condition()
-        self.ensembles = [self.ground_truth + np.random.multivariate_normal(ensemble_mean, ensemble_covariance) for _ in range(self.ensemble_size)]
+        self.ensembles = [self.ground_truth + self.np_random.multivariate_normal(ensemble_mean, ensemble_covariance) for _ in range(self.ensemble_size)]
 
         # compute forecast, observe next step to get error
         priors = [
@@ -75,7 +79,7 @@ class RLEnv(gym.Env):
         ]
         forecast_mean = sum(priors) / self.ensemble_size
         self.ground_truth = self.ground_truth_forward(self.ground_truth, self.T, self.dt)
-        observation = H @ self.ground_truth + np.random.multivariate_normal(np.zeros(self.observation_dimension), self.noise_covariance)
+        observation = H @ self.ground_truth + self.np_random.multivariate_normal(np.zeros(self.observation_dimension), self.noise_covariance)
         error = H @ forecast_mean - observation
 
         # construct our RL model input vector
@@ -83,8 +87,14 @@ class RLEnv(gym.Env):
         self.last_obs = observation
         self.T += self.dt
 
-        return input_vector, None
+        return input_vector, self.__get_info()
 
+    def __get_info(self):
+        return {
+            "time": self.T,
+            "ground_truth": self.ground_truth,
+            "ens_mean": np.mean(self.ensembles)
+        }
 
 def runge_kutta_4(func, x0, t, dt):
     '''Apply runge-kutta to a function'''
