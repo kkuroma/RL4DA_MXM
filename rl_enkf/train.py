@@ -17,6 +17,7 @@ class Train:
         observation_dimension = self.N
 
         identity = np.identity(self.N, dtype=np.float32)
+        noise = 0.2
         initial_condition = lambda : np.ones(self.N, dtype=np.float32) + np.random.multivariate_normal(np.zeros(self.N), 0.1 * identity)
 
         indiv_action_bounds = 0.5 * np.ones(self.N, dtype=np.float32)
@@ -25,11 +26,12 @@ class Train:
         action_space = gym.spaces.Box(low=-action_bounds, high=action_bounds, dtype=np.float32)
         observation_space = gym.spaces.Box(low=-observation_bounds, high=observation_bounds, dtype=np.float32)
 
-        initial_ensemble_noise = (np.zeros(self.N), identity)
+        #initial_ensemble_noise = (np.zeros(self.N), identity)
+        initial_ensemble_noise = (np.zeros(self.N), np.eye(observation_dimension) * noise)
         termination_rule = lambda t, ens: t > 100
 
         self.rl_environment = RLEnv(derivative_func, state_dimension=self.N, observation_dimension=self.N, Nens=self.Nens,
-            action_space=action_space, observation_space=observation_space, H=identity, noise=identity, initial_condition=initial_condition,
+            action_space=action_space, observation_space=observation_space, H=identity, noise=noise, initial_condition=initial_condition,
             initial_ensemble_noise=initial_ensemble_noise, termination_rule=termination_rule)
 
 def main():

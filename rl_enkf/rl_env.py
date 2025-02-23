@@ -1,5 +1,6 @@
 import gymnasium as gym
 import numpy as np
+from enkf import eakf
 
 class RLEnv(gym.Env):
     def __init__(self, derivative_func, dt=0.1, state_dimension=None, observation_dimension=None, Nens=40, action_space=None, observation_space=None, H=None, noise=None, initial_condition=None,
@@ -12,7 +13,9 @@ class RLEnv(gym.Env):
         self.observation_dimension = observation_dimension
         self.ensemble_size = Nens # number of elements in the ensemble
         self.observation_matrix = H # projects each (ground truth) state vector to observation space
-        self.noise_covariance = noise # covariance matrix for observations. obs = H * truth + w, w ~ N(noise)
+        #self.noise_covariance = noise # covariance matrix for observations. obs = H * truth + w, w ~ N(noise)
+        self.noise_variance = noise
+        self.noise_covariance = np.eye(observation_dimension) * noise
         self.initial_condition = initial_condition # function that returns a (possibly random?) initial condition
         self.initial_ensemble_noise = initial_ensemble_noise # (mean, covariance) of noise added to initial condition to generate initial ensemble members
         self.termination_rule = termination_rule # termination_rule(t, ensemble) returns whether or not to terminate per step
@@ -24,22 +27,31 @@ class RLEnv(gym.Env):
         self.observation_space = observation_space
 
         self.T = 0
+        self.last_obs = None
 
     def step(self, action):
-        self.ensembles = np.split(action, self.ensemble_size)
         H = self.observation_matrix
 
-        # Compute forecast, observe next step to get error (plus ground-truth error)
+        # see how the enkf model would have updated the ensemble
+        zens = np.stack(self.ensembles, 1)
+        zens = eakf(self.ensemble_size, self.observation_dimension, zens, H, self.noise_variance, False, None, self.last_obs)
+
+        # get rmse between enkf-predicted update and action to get score
+        zens = np.concatenate(np.unstack(zens))
+        rmse = np.sqrt(np.mean((zens - action)**2))
+
+        # Compute forecast, observe next step to get error
+        self.ensembles = np.split(action, self.ensemble_size)
         priors = [
             runge_kutta_4(self.dx, ensemble, self.T, self.dt)
             for ensemble in self.ensembles
         ]
         forecast_mean = sum(priors) / self.ensemble_size
-        self.ground_truth = self.ground_truth_forward(self.ground_truth, self.T, self.dt)
-        observation = H @ self.ground_truth + np.random.multivariate_normal(np.zeros(self.observation_dimension), self.noise_covariance)
-        error = H @ forecast_mean - observation
-        rmse = np.sqrt(np.mean((self.ground_truth - forecast_mean)**2))
 
+        observation = H @ self.ground_truth + np.random.multivariate_normal(np.zeros(self.observation_dimension), self.noise_covariance)
+        error = H @ forecast_mean - observation # error between observation and prior
+
+        # Construct input vector (ensembles + error between forecast and observation)
         input_vector = np.concat((error, np.concat(self.ensembles)))
         self.T += self.dt
 
@@ -68,9 +80,11 @@ class RLEnv(gym.Env):
 
         # construct our RL model input vector
         input_vector = np.concat((error, np.concat(self.ensembles)))
+        self.last_obs = observation
         self.T += self.dt
 
         return input_vector, None
+
 
 def runge_kutta_4(func, x0, t, dt):
     '''Apply runge-kutta to a function'''
