@@ -33,6 +33,8 @@ def eakf(ensemble_size, nobsgrid, zens, Hk, obs_error_var, localize, CMat, zobs,
         if debug: print('hxprime: ', hxprime.shape)
         hpbht = (hxprime.T.dot(hxprime) * rn) # rn * ||hxprime||^2
         if debug: print('hpbht: ', hpbht)
+        # normalize
+        if hpbht == 0 or hpbht == obs_error_var: hpbht += 1e-8
         gainfact = (hpbht + obs_error_var) / hpbht * (1.0 - np.sqrt(obs_error_var / (hpbht + obs_error_var))) # Can't parse this well but used in calculating the increment?
         if debug: print('gainfact: ', gainfact.shape)
         pbht = (xprime.dot( hxprime)) * rn
