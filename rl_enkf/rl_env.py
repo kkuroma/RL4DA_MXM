@@ -65,6 +65,8 @@ class RLEnv(gym.Env):
         else:
             super().reset(seed=self.seed)
 
+        self.T = 0
+
         ensemble_mean, ensemble_covariance = self.initial_ensemble_noise
         H = self.observation_matrix
 

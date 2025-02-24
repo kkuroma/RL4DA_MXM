@@ -6,9 +6,11 @@ import torch
 from stable_baselines3 import SAC, PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecNormalize, VecMonitor
 from stable_baselines3.common.logger import configure
+from stable_baselines3.common.evaluation import evaluate_policy
+from stable_baselines3.common.callbacks import EvalCallback
 
 class Train:
-    def __init__(self, N=40, F=5, Nens=20, action_coef=10, observation_coef=10, seed=0):
+    def __init__(self, N=8, F=5, Nens=8, action_coef=1, observation_coef=1, seed=0):
         self.N = N
         self.F = F
         self.Nens = Nens
@@ -22,12 +24,17 @@ class Train:
         noise = 0.2
         initial_condition = lambda : np.ones(self.N, dtype=np.float32) + np.random.multivariate_normal(np.zeros(self.N), 0.1 * identity)
 
+        '''
         indiv_action_bounds = action_coef * np.ones(self.N, dtype=np.float32)
         indiv_obs_bounds = observation_coef * np.ones(self.N, dtype=np.float32)
         action_bounds = np.concat([indiv_action_bounds[:] for _ in range(self.Nens)])
         observation_bounds = np.concat([indiv_obs_bounds[:]] + [indiv_action_bounds[:] for _ in range(self.Nens)])
         action_space = gym.spaces.Box(low=-action_bounds, high=action_bounds, dtype=np.float32)
         observation_space = gym.spaces.Box(low=-observation_bounds, high=observation_bounds, dtype=np.float32)
+        '''
+
+        action_space = gym.spaces.Box(low=-1, high=1, shape=(self.Nens * self.N,), dtype="float32")
+        observation_space = gym.spaces.Box(low=-1, high=1, shape=((self.Nens + 1) * self.N,), dtype="float32")
 
         #initial_ensemble_noise = (np.zeros(self.N), identity)
         initial_ensemble_noise = (np.zeros(self.N), np.eye(observation_dimension) * noise)
@@ -47,26 +54,27 @@ def main():
             return training_handler.rl_environment
         return wrapper
 
-    #training_handler = Train()
-    #env = training_handler.rl_environment
-    #assert isinstance(env.action_space, gym.spaces.box.Box), (f"proved class type {env.action_space}")
-    #model = SAC("MlpPolicy", env, verbose=1)
-    num_cpu = 50
-    n_epochs = 15
+    n_epochs = 150 # number of episodes
+    epoch_length = 500 # length of each episode
+    eval_freq = 1500 # training steps before evaluating
 
-    env = SubprocVecEnv([make_env(i) for i in range(num_cpu)])
-    env = VecNormalize(env)
-    env = VecMonitor(env, filename="log.txt")
-    logger = configure('logs', ["stdout", "csv"])
-    model = PPO("MlpPolicy", env,
+    training_env = Train().rl_environment
+    eval_env = Train(seed=1).rl_environment
+    eval_callback = EvalCallback(eval_env, best_model_save_path='./logs/',
+        log_path='./logs/', eval_freq=eval_freq, deterministic=True,
+        render=False)
+
+    model = PPO("MlpPolicy", training_env,
+        n_steps=epoch_length,
         n_epochs=n_epochs,
-        verbose=1
+        batch_size=epoch_length // 20,
+        verbose=2
     )
-    model.set_logger(logger)
     model.learn(
-        total_timesteps=10000,
-        log_interval=4,
-        progress_bar=False
+        total_timesteps=epoch_length * n_epochs,
+        log_interval=1,
+        progress_bar=False,
+        callback=eval_callback
     )
     model.save("lorenz96")
 
