@@ -41,6 +41,9 @@ class RLEnv(gym.Env):
         zens = np.concatenate(np.unstack(zens))
         rmse = np.sqrt(np.mean((zens - action)**2))
 
+        # Now forward-pass the ground truth, compute forecast, and get observation
+        self.ground_truth = self.ground_truth_forward(self.ground_truth, self.T, self.dt)
+
         # Compute forecast, observe next step to get error
         self.ensembles = np.split(action, self.ensemble_size)
         priors = [
