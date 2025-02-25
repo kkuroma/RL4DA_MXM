@@ -21,7 +21,7 @@ class Train:
         observation_dimension = self.N
 
         identity = np.identity(self.N, dtype=np.float32)
-        noise = 0.2
+        noise = 0.1
         initial_condition = lambda : np.ones(self.N, dtype=np.float32) + np.random.multivariate_normal(np.zeros(self.N), 0.1 * identity)
 
         '''
