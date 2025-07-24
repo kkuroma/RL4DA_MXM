@@ -1,0 +1,164 @@
+_current_progress_remaining:
+    value: 1
+_custom_logger:
+    value: "False"
+_episode_num:
+    value: 0
+_last_episode_starts:
+    value: '[ True]'
+_last_obs:
+    value: |-
+        [[ -1.4726838   3.041061   26.063934   -6.455393  -10.372021   16.655146
+           45.137447   -5.8922744 -73.982346 ]]
+_last_original_obs:
+    value: None
+_logger:
+    value: <stable_baselines3.common.logger.Logger object at 0x7fd3ba6e7fb0>
+_n_updates:
+    value: 0
+_num_timesteps_at_start:
+    value: 0
+_stats_window_size:
+    value: 100
+_total_timesteps:
+    value: 10000000
+_vec_normalize_env:
+    value: None
+_wandb:
+    value:
+        cli_version: 0.19.9
+        m: []
+        python_version: 3.12.5
+        t:
+            "1":
+                - 1
+                - 55
+                - 105
+            "2":
+                - 1
+                - 55
+                - 105
+            "3":
+                - 16
+                - 22
+                - 23
+                - 55
+            "4": 3.12.5
+            "5": 0.19.9
+            "8":
+                - 5
+            "12": 0.19.9
+            "13": linux-x86_64
+action_noise:
+    value: None
+action_space:
+    value: Box(-50.0, 50.0, (3,), float32)
+algo:
+    value: PPO
+batch_size:
+    value: 64
+clip_range:
+    value: <function get_schedule_fn.<locals>.<lambda> at 0x7fd3ba1f3d80>
+clip_range_vf:
+    value: None
+device:
+    value: cpu
+ent_coef:
+    value: 0
+env:
+    value: <stable_baselines3.common.vec_env.dummy_vec_env.DummyVecEnv object at 0x7fd3dd13f320>
+env_name:
+    value: L63-ENKF
+ep_info_buffer:
+    value: deque([], maxlen=100)
+ep_success_buffer:
+    value: deque([], maxlen=100)
+gae_lambda:
+    value: 0.95
+gamma:
+    value: 0.99
+learning_rate:
+    value: 0.0003
+lr_schedule:
+    value: <function get_schedule_fn.<locals>.<lambda> at 0x7fd3da33d940>
+max_grad_norm:
+    value: 0.5
+n_envs:
+    value: 1
+n_epochs:
+    value: 10
+n_steps:
+    value: 2048
+normalize_advantage:
+    value: "True"
+num_timesteps:
+    value: 0
+observation_space:
+    value: Box(-50.0, 50.0, (9,), float32)
+policy:
+    value: |-
+        CustomMLPPolicy(
+          (features_extractor): FeatureExtractor(
+            (net): Sequential(
+              (0): Linear(in_features=9, out_features=32, bias=True)
+              (1): ReLU()
+              (2): Linear(in_features=32, out_features=16, bias=True)
+              (3): ReLU()
+              (4): Linear(in_features=16, out_features=8, bias=True)
+              (5): ReLU()
+            )
+          )
+          (pi_features_extractor): FeatureExtractor(
+            (net): Sequential(
+              (0): Linear(in_features=9, out_features=32, bias=True)
+              (1): ReLU()
+              (2): Linear(in_features=32, out_features=16, bias=True)
+              (3): ReLU()
+              (4): Linear(in_features=16, out_features=8, bias=True)
+              (5): ReLU()
+            )
+          )
+          (vf_features_extractor): FeatureExtractor(
+            (net): Sequential(
+              (0): Linear(in_features=9, out_features=32, bias=True)
+              (1): ReLU()
+              (2): Linear(in_features=32, out_features=16, bias=True)
+              (3): ReLU()
+              (4): Linear(in_features=16, out_features=8, bias=True)
+              (5): ReLU()
+            )
+          )
+          (mlp_extractor): IdentityMLPExtractor()
+          (action_net): Linear(in_features=8, out_features=3, bias=True)
+          (value_net): Linear(in_features=8, out_features=1, bias=True)
+        )
+policy_class:
+    value: <class '__main__.CustomMLPPolicy'>
+policy_kwargs:
+    value: '{}'
+policy_type:
+    value: PPO-shared
+rollout_buffer:
+    value: <stable_baselines3.common.buffers.RolloutBuffer object at 0x7fd3dbd2be30>
+rollout_buffer_class:
+    value: <class 'stable_baselines3.common.buffers.RolloutBuffer'>
+rollout_buffer_kwargs:
+    value: '{}'
+sde_sample_freq:
+    value: -1
+seed:
+    value: None
+start_time:
+    value: 1744080336409339851
+target_kl:
+    value: None
+tensorboard_log:
+    value: None
+total_timesteps:
+    value: 10000000
+use_sde:
+    value: "False"
+verbose:
+    value: 1
+vf_coef:
+    value: 0.5

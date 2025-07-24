@@ -1,0 +1,17 @@
+{"time":"2025-04-07T21:38:36.842829018-05:00","level":"INFO","msg":"stream: starting","core version":"0.19.9","symlink path":"/root/workspace/college-math/mxm/RL4DA_MXM/enkf_L63/wandb/run-20250407_213836-94tmivlf/logs/debug-core.log"}
+{"time":"2025-04-07T21:38:44.693387619-05:00","level":"INFO","msg":"created new stream","id":"94tmivlf"}
+{"time":"2025-04-07T21:38:44.693479509-05:00","level":"INFO","msg":"stream: started","id":"94tmivlf"}
+{"time":"2025-04-07T21:38:44.693532552-05:00","level":"INFO","msg":"writer: Do: started","stream_id":"94tmivlf"}
+{"time":"2025-04-07T21:38:44.693603662-05:00","level":"INFO","msg":"handler: started","stream_id":"94tmivlf"}
+{"time":"2025-04-07T21:38:44.693574378-05:00","level":"INFO","msg":"sender: started","stream_id":"94tmivlf"}
+{"time":"2025-04-07T21:38:44.915147513-05:00","level":"INFO","msg":"Starting system monitor"}
+{"time":"2025-04-07T21:38:45.234888046-05:00","level":"INFO","msg":"Stopping system monitor"}
+{"time":"2025-04-07T21:38:45.235003865-05:00","level":"INFO","msg":"Stopped system monitor"}
+{"time":"2025-04-07T21:38:46.033393206-05:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2025-04-07T21:38:46.196066599-05:00","level":"INFO","msg":"handler: operation stats","stats":{"operations":[{"desc":"uploading data","runtime_seconds":0.886688783}],"total_operations":1}}
+{"time":"2025-04-07T21:39:46.273725348-05:00","level":"INFO","msg":"handler: operation stats","stats":{"operations":[{"desc":"uploading history steps 0-7, summary","runtime_seconds":59.790280783}],"total_operations":1}}
+{"time":"2025-04-07T21:39:51.309653419-05:00","level":"INFO","msg":"stream: closing","id":"94tmivlf"}
+{"time":"2025-04-07T21:39:51.309714565-05:00","level":"INFO","msg":"handler: closed","stream_id":"94tmivlf"}
+{"time":"2025-04-07T21:39:51.309838445-05:00","level":"INFO","msg":"sender: closed","stream_id":"94tmivlf"}
+{"time":"2025-04-07T21:39:51.30973623-05:00","level":"INFO","msg":"writer: Close: closed","stream_id":"94tmivlf"}
+{"time":"2025-04-07T21:39:51.310143601-05:00","level":"INFO","msg":"stream: closed","id":"94tmivlf"}
