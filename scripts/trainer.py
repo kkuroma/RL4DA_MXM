@@ -124,7 +124,7 @@ class ZeroInitEvalEnv(EAKF_RL_Env):
         """Reset environment with zero initial conditions."""
         # Always use zero initial conditions for evaluation
         self.fixed_initial_condition = False
-        return super().reset(seed=seed, initial_condition=np.zeros(self.N)+5.0)
+        return super().reset(seed=seed, initial_condition=np.zeros(self.N)+5/np.sqrt(self.N))
     
     def step(self, action):
         """Override step to use eval-specific visualization."""
