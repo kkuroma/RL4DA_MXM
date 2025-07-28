@@ -4,6 +4,7 @@ import argparse
 import importlib.util
 import os
 import sys
+import json
 from gymnasium import spaces, Env
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
@@ -11,7 +12,7 @@ from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback,
 from stable_baselines3.common.monitor import Monitor
 from agents import create_mlp_agent, create_lstm_agent, create_custom_lstm_agent
 
-# TODO: 3 different models, dont implement yet I'll do it myself
+# TODO: 3 different models
 # L96 - N=20, N_ens=20, F=5 (ground truth)
 # Finish these 3 first
 # L96 - N=17, N_ens=20, F=5
@@ -28,11 +29,8 @@ class EAKF_RL_Env(Env):
         super(EAKF_RL_Env, self).__init__()
         
         self.solver = solver
-        true_initial = solver.true_initial
-        self.N = len(true_initial)  # dimension of state space
-        self.norm_factors = self.get_normed_factor()
-            
-        self.solver.reset(true_initial)
+        self.N = len(solver.true_initial)  # dimension of state space
+        self.norm_factors = solver.normed_factors
         self.solver.step() # Perform initial solver step to populate data
         self.n_ens = solver.num_ensembles  # number of ensemble members
         # norm_factor is now computed dynamically in get_normed_factor()
@@ -56,18 +54,6 @@ class EAKF_RL_Env(Env):
         )
         self.last_reward = -1e10
         self.curr_reward = 0
-        
-    def get_normed_factor(self):
-        # run 100 iterations of 20 random starting conditions to aggregate 
-        print("Generating normalization factor")
-        results = []
-        for _ in range(20):
-            self.solver.reset(np.random.randn(self.N)*5)
-            results.append(self.solver.run_eakf(100, verbose=True))
-        return {
-            key: np.max([np.max(np.abs(result[key])) for result in results])
-            for key in results[0].keys()
-        }
     
     def _get_observation(self):
         """Get observation for RL agent."""
@@ -221,6 +207,23 @@ def train_from_config(config):
     os.makedirs(config["tensorboard_log"], exist_ok=True)
     if config.get("viz_save_path"):
         os.makedirs(config["viz_save_path"], exist_ok=True)
+    
+    # Save normalization factors to JSON
+    if config.get("norm_factors_save_path"):
+        os.makedirs(os.path.dirname(config["norm_factors_save_path"]), exist_ok=True)
+        
+        # Convert numpy arrays to lists for JSON serialization
+        norm_factors_serializable = {}
+        for key, value in config["solver"].normed_factors.items():
+            if isinstance(value, np.ndarray):
+                norm_factors_serializable[key] = value.tolist()
+            else:
+                norm_factors_serializable[key] = value
+        
+        with open(config["norm_factors_save_path"], 'w') as f:
+            json.dump(norm_factors_serializable, f, indent=2)
+        
+        print(f"Normalization factors saved to: {config['norm_factors_save_path']}")
     
     # Create evaluation environment
     eval_env = create_eval_env(config)

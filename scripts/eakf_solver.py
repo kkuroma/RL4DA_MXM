@@ -50,6 +50,19 @@ class EAKFSolver:
         self.use_solver_ivp = use_solver_ivp
         self.noise_strength = noise_strength
         self.reset()
+        
+    def set_normed_factor(self):
+        print("Generating normalization factor...")
+        true_initial = self.true_initial
+        results = []
+        for _ in range(20):
+            self.reset(np.random.randn(self.true_initial.shape[0])*5)
+            results.append(self.run_eakf(100, verbose=True))
+        self.reset(true_initial)
+        self.normed_factors = {
+            key: np.max([np.max(np.abs(result[key])) for result in results])
+            for key in results[0].keys()
+        }
     
     def reset(self, initial_conditions=None):
         """

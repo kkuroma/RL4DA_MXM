@@ -2,32 +2,32 @@ import numpy as np
 import sys
 import os
 
-PROJECT_NAME = "L63_LSTM"
+PROJECT_NAME = "L96_LSTM_2"
 
 # Add scripts directory to path for imports
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'scripts'))
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'scripts', 'models'))
 
 from eakf_solver import EAKFSolver
-from models.l63 import L63
+from models.l96 import L96
 
-# Create solver instance based on eakf_demo.ipynb settings
+# Create solver instance for L96 - N=20, N_ens=20, F=4.5
 def create_solver():
-    # L63 parameters
-    l63_params = {"sigma": 10.0, "rho": 28.0, "beta": 8.0/3.0}
-    initial_conditions = np.array([5, 5, 5]) # (this is randomized later)
+    # L96 parameters
+    l96_params = {"N": 20, "F": 4.5}
+    initial_conditions = np.ones(20) + 0.1 * np.random.randn(20)  # Small perturbations around 1
     num_ensembles = 20  # Full ensemble size
     
     # EAKF setup
-    H = np.eye(3)  # Observe all variables
-    R = 0.1 * np.eye(3)  # Observation error covariance
+    H = np.eye(20)  # Observe all variables
+    R = 0.1 * np.eye(20)  # Observation error covariance
     dtda = 0.01  # Time step
     oda = 1.0   # Time between observations
     
     # Create EAKF solver
     solver = EAKFSolver(
-        model_class=L63,
-        model_params=l63_params,
+        model_class=L96,
+        model_params=l96_params,
         initial_conditions=initial_conditions,
         num_ensembles=num_ensembles,
         H=H, R=R, dtda=dtda, oda=oda,
@@ -62,12 +62,12 @@ config = {
     # Evaluation configuration
     "eval_freq": 10000,
     "eval_episodes": 1,
-    "eval_initial_condition": np.array([0.0, 0.0, 0.0]),  # Zero vector for evaluation
+    "eval_initial_condition": np.ones(20),  # Vector of ones for evaluation
     "eval_n_steps": 1000,
     
     # Logging configuration
     "tensorboard_log": f"./logs/{PROJECT_NAME}/tensorboard/",
-    "instance_name": "L63_LSTM_v1",
+    "instance_name": "L96_LSTM_2_v1",
     
     # Model saving configuration
     "save_path": f"./logs/{PROJECT_NAME}/weights",
