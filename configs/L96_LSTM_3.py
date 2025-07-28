@@ -32,7 +32,7 @@ def create_solver():
         num_ensembles=num_ensembles,
         H=H, R=R, dtda=dtda, oda=oda,
         noise_strength=1.0,
-        inflation=1.5,
+        inflation=3.0,
         use_solver_ivp=False
     )
     solver.set_normed_factor()
