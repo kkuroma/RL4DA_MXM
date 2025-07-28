@@ -49,6 +49,36 @@ class EAKFSolver:
         self.inflation = inflation
         self.use_solver_ivp = use_solver_ivp
         self.noise_strength = noise_strength
+        
+        # Pre-allocate arrays for performance
+        self.state_dim = len(initial_conditions)
+        self.obs_dim = H.shape[0]
+        self.steps_per_oda = int(oda / dtda)
+        
+        # Create reusable model instances for ensemble members
+        self._ensemble_models = []
+        for _ in range(num_ensembles):
+            if isinstance(model_params, dict):
+                model = model_class(model_params, dtda, use_solver_ivp)
+            else:
+                model = model_class(*model_params, dtda, use_solver_ivp)
+            self._ensemble_models.append(model)
+        
+        # Create single model for derivatives computation
+        if isinstance(model_params, dict):
+            self._derivative_model = model_class(model_params, dtda, use_solver_ivp)
+        else:
+            self._derivative_model = model_class(*model_params, dtda, use_solver_ivp)
+            
+        # Pre-allocate arrays
+        self._xb_array = np.zeros((self.state_dim, num_ensembles))
+        self._derivs_array = np.zeros((self.state_dim, num_ensembles))
+        self._noise_array = np.zeros(self.obs_dim)
+        self._obs_noise_array = np.zeros((self.obs_dim, num_ensembles))
+        
+        # Cache Cholesky decomposition for performance
+        self._chol_R = np.linalg.cholesky(R)
+        
         self.reset()
         
     def set_normed_factor(self):
@@ -73,13 +103,17 @@ class EAKFSolver:
         """
         if initial_conditions is not None:
             self.true_initial = np.array(initial_conditions)
-        # Initialize true model - handle both dict and legacy parameter formats
+        # Initialize true model (reuse existing instance)
+        if not hasattr(self, 'true_model'):
+            if isinstance(self.model_params, dict):
+                self.true_model = self.model_class(self.model_params, self.dtda, self.use_solver_ivp)
+            else:
+                self.true_model = self.model_class(*self.model_params, self.dtda, self.use_solver_ivp)
         
-        self.true_model = self.model_class(self.model_params, self.dtda, self.use_solver_ivp)
         self.true_model.initialize(self.true_initial)
         
         # Advance true model to first observation time
-        for _ in range(int(self.oda / self.dtda)):
+        for _ in range(self.steps_per_oda):
             self.true_state, _ = self.true_model.step()
         
         # Initialize ensemble analysis states
@@ -163,40 +197,33 @@ class EAKFSolver:
         # Store previous analysis
         self.previous_analysis.append(self.xa.copy())
         
-        # Compute and store background derivatives at analysis points
-        derivs = np.zeros_like(self.xa)
+        # Compute and store background derivatives at analysis points (optimized)
         for l in range(self.num_ensembles):
-            if isinstance(self.model_params, dict):
-                temp_model = self.model_class(self.model_params, self.dtda, self.use_solver_ivp)
-            else:
-                temp_model = self.model_class(*self.model_params, self.dtda, self.use_solver_ivp)
-            derivs[:, l] = temp_model.derivatives(0, self.xa[:, l])
-        self.derivatives.append(derivs.copy())
+            self._derivs_array[:, l] = self._derivative_model.derivatives(0, self.xa[:, l])
+        self.derivatives.append(self._derivs_array.copy())
         
-        # Generate observation with noise
-        observation = self.H @ self.true_state + np.linalg.cholesky(self.R) @ np.random.randn(self.H.shape[0])
+        # Generate observation with noise (optimized with cached Cholesky)
+        self._noise_array[:] = np.random.randn(self.obs_dim)
+        observation = self.H @ self.true_state + self._chol_R @ self._noise_array
         self.observations.append(observation.copy())
         
-        # Generate perturbed observations for the ensemble
-        Y = observation[:, np.newaxis] + np.linalg.cholesky(self.R) @ np.random.randn(self.H.shape[0], self.num_ensembles)
+        # Generate perturbed observations for the ensemble (optimized with cached Cholesky)
+        self._obs_noise_array[:] = np.random.randn(self.obs_dim, self.num_ensembles)
+        Y = observation[:, np.newaxis] + self._chol_R @ self._obs_noise_array
         
-        # Propagate each ensemble member forward in time
-        xb = np.zeros_like(self.xa)
+        # Propagate each ensemble member forward in time (optimized)
         for l in range(self.num_ensembles):
-            if isinstance(self.model_params, dict):
-                model = self.model_class(self.model_params, self.dtda, self.use_solver_ivp)
-            else:
-                model = self.model_class(*self.model_params, self.dtda, self.use_solver_ivp)
+            model = self._ensemble_models[l]
             model.initialize(self.xa[:, l])
-            for _ in range(int(self.oda / self.dtda)):
-                xb[:, l], _ = model.step()
+            for _ in range(self.steps_per_oda):
+                self._xb_array[:, l], _ = model.step()
         
         # Store background states
-        self.background_states.append(xb.copy())
+        self.background_states.append(self._xb_array.copy())
         
         # Apply inflation
-        xb_mean = np.mean(xb, axis=1, keepdims=True)
-        xb = xb_mean + (xb - xb_mean) * self.inflation
+        xb_mean = np.mean(self._xb_array, axis=1, keepdims=True)
+        xb = xb_mean + (self._xb_array - xb_mean) * self.inflation
         
         # Prepare dictionary of parameters for Kalman update
         kalman_params = {
@@ -217,13 +244,9 @@ class EAKFSolver:
         # Store analysis states
         self.analysis_states.append(self.xa.copy())
         
-        # Advance true state to next observation time
-        if isinstance(self.model_params, dict):
-            self.true_model = self.model_class(self.model_params, self.dtda, self.use_solver_ivp)
-        else:
-            self.true_model = self.model_class(*self.model_params, self.dtda, self.use_solver_ivp)
+        # Advance true state to next observation time (reuse existing model)
         self.true_model.initialize(self.true_state)
-        for _ in range(int(self.oda / self.dtda)):
+        for _ in range(self.steps_per_oda):
             self.true_state, _ = self.true_model.step()
         
         self.current_step += 1

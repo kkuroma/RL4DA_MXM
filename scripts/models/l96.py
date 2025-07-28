@@ -50,7 +50,7 @@ class L96:
 
     def derivatives(self, t, state):
         """
-        Compute Lorenz 96 derivatives.
+        Compute Lorenz 96 derivatives using vectorized operations.
         
         Args:
             t: Time (not used in autonomous system)
@@ -60,12 +60,15 @@ class L96:
             numpy.ndarray: Derivative vector
         """
         X = np.array(state)
-        dXdt = np.zeros(self.N)
         
-        # Lorenz 96 equations with periodic boundary conditions
-        for i in range(self.N):
-            # Use modulo for periodic boundary conditions
-            dXdt[i] = (X[(i+1) % self.N] - X[(i-2) % self.N]) * X[(i-1) % self.N] - X[i] + self.F
+        # Vectorized Lorenz 96 equations with periodic boundary conditions
+        # Create shifted arrays for efficient vectorized computation
+        X_plus1 = np.roll(X, -1)    # X[(i+1) % N] for all i
+        X_minus1 = np.roll(X, 1)    # X[(i-1) % N] for all i  
+        X_minus2 = np.roll(X, 2)    # X[(i-2) % N] for all i
+        
+        # Vectorized computation: (X_{i+1} - X_{i-2}) * X_{i-1} - X_i + F
+        dXdt = (X_plus1 - X_minus2) * X_minus1 - X + self.F
         
         return dXdt
 
@@ -111,8 +114,9 @@ class L96:
             )
             new_state = sol.y[:, -1]
         else:
-            # Use RK4 method (more stable than Euler for L96)
-            new_state = self._rk4_step(current_state, self.dt)
+            # Use Euler method by default for speed (RK4 available if needed)
+            derivatives = self.derivatives(current_time, current_state)
+            new_state = current_state + derivatives * self.dt
         
         new_time = current_time + self.dt
         

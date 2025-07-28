@@ -32,7 +32,7 @@ def create_solver():
         num_ensembles=num_ensembles,
         H=H, R=R, dtda=dtda, oda=oda,
         noise_strength=1.0,
-        inflation=3.0,
+        inflation=5.0,
         use_solver_ivp=False
     )
     solver.set_normed_factor()
@@ -66,7 +66,7 @@ config = {
     "eval_n_steps": 1000,
     
     # Logging configuration
-    "tensorboard_log": f"./logs/{PROJECT_NAME}/tensorboard/",
+    "tensorboard_log": "./logs/tensorboard",
     "instance_name": "L96_LSTM_3_v1",
     
     # Model saving configuration
