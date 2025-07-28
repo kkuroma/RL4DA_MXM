@@ -1,6 +1,7 @@
 import numpy as np
 from tqdm import tqdm
-
+import matplotlib.pyplot as plt
+import os
 class EAKFSolver:
     """
     Environment-like EAKF solver that expects models with derivative() and step() methods.
@@ -47,13 +48,7 @@ class EAKFSolver:
         self.oda = oda
         self.inflation = inflation
         self.use_solver_ivp = use_solver_ivp
-        
-        # Initialize ensemble with noise
-        self.ensemble_initials = [
-            self.true_initial + np.random.randn(len(self.true_initial)) * noise_strength 
-            for _ in range(num_ensembles)
-        ]
-        
+        self.noise_strength = noise_strength
         self.reset()
     
     def reset(self, initial_conditions=None):
@@ -75,6 +70,10 @@ class EAKFSolver:
             self.true_state, _ = self.true_model.step()
         
         # Initialize ensemble analysis states
+        self.ensemble_initials = [
+            self.true_initial + np.random.randn(len(self.true_initial)) * self.noise_strength 
+            for _ in range(self.num_ensembles)
+        ]
         self.xa = np.array(self.ensemble_initials).T
         
         # Storage for diagnostics
@@ -222,7 +221,8 @@ class EAKFSolver:
             'analysis_ensemble': self.analysis_states[-1].copy(),
             'derivatives': self.derivatives[-1].copy(),
             'observation': self.observations[-1].copy(),
-            'step': self.current_step - 1
+            'step': self.current_step - 1,
+            "ensemble_observation": Y,
         }
     
     def run_eakf(self, num_assimilations, verbose=True, custom_kalman_func=None):
@@ -262,3 +262,48 @@ class EAKFSolver:
             "observations": np.array(self.observations) if self.observations else None,
             "current_step": self.current_step
         }
+    
+    def visualize(self, save_path=None, title_suffix="", show_plot=False):
+        """
+        Visualize RMSE comparison between truth vs forecast and truth vs posterior.
+        
+        Args:
+            save_path: Path to save the plot (if None, plot is not saved)
+            title_suffix: Additional text to add to the plot title
+            show_plot: Whether to display the plot (default: False)
+        """
+        if not self.true_states or not self.background_states or not self.analysis_states:
+            print("Warning: No data to visualize. Run the solver first.")
+            return
+        
+        # Convert to numpy arrays and compute means
+        truth = np.array(self.true_states)
+        background = np.array(self.background_states).mean(axis=-1)  # Mean over ensemble
+        analysis = np.array(self.analysis_states).mean(axis=-1)      # Mean over ensemble
+        
+        # Compute RMSE
+        rmse_background = np.sqrt(np.mean((truth - background)**2, axis=1))
+        rmse_analysis = np.sqrt(np.mean((truth - analysis)**2, axis=1))
+        
+        # Create plot
+        plt.figure(figsize=(10, 5))
+        plt.plot(rmse_background, label="Truth vs Forecast", linewidth=2, color='red')
+        plt.plot(rmse_analysis, label="Truth vs Posterior", linewidth=2, color='blue')
+        
+        plt.xlabel("Time Steps", fontsize=12, fontweight='bold')
+        plt.ylabel("Root Mean Squared Error (RMSE)", fontsize=12, fontweight='bold')
+        plt.title(f"RMSE Comparison: Truth vs Posterior & Forecast{title_suffix}", fontsize=14, fontweight='bold')
+        plt.legend(prop={'size': 16})
+        plt.grid()
+        
+        # Save plot if path provided
+        if save_path:
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"Plot saved to: {save_path}")
+        
+        # Show plot if requested
+        if show_plot:
+            plt.show()
+        else:
+            plt.close()  # Close to free memory

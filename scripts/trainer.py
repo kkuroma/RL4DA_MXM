@@ -11,65 +11,123 @@ from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback,
 from stable_baselines3.common.monitor import Monitor
 from agents import create_mlp_agent, create_lstm_agent, create_custom_lstm_agent
 
+# TODO: 3 different models, dont implement yet I'll do it myself
+# L96 - N=20, N_ens=20, F=5 (ground truth)
+# Finish these 3 first
+# L96 - N=17, N_ens=20, F=5
+# L96 - N=20, N_ens=20, F=4.5
+# L96 - N=20, N_ens=20, F=5.5
+# Train this combined agent
+# 3 agents - one for each of the last three, trained using RL as well?
+# p(x,y,z | x_a)
+# meta-agent? combine these three (MoE esque) - pick one of the 3 agents
+
 class EAKF_RL_Env(Env):
-    def __init__(self, solver, norm_factor=1.0, n_steps=1000, device='cpu', fixed_initial_condition=True):
+    def __init__(self, solver, n_steps=1000, device='cpu', fixed_initial_condition=True, 
+                 visualize_episodes=False, viz_save_path=None):
         super(EAKF_RL_Env, self).__init__()
         
         self.solver = solver
+        true_initial = solver.true_initial
+        self.N = len(true_initial)  # dimension of state space
+        self.norm_factors = self.get_normed_factor()
+            
+        self.solver.reset(true_initial)
         self.solver.step() # Perform initial solver step to populate data
-        self.N = len(solver.true_initial)  # dimension of state space
         self.n_ens = solver.num_ensembles  # number of ensemble members
-        self.norm_factor = norm_factor
+        # norm_factor is now computed dynamically in get_normed_factor()
         self.device = device
         self.n_steps = n_steps
         self.current_step = 0
         self.fixed_initial_condition = fixed_initial_condition
         self.ground_truth = self.solver.xa
-        
+        self.alpha = 0
+        self.visualize_episodes = visualize_episodes
+        self.viz_save_path = viz_save_path
+        self.current_ep = 0
         # Single agent handles all ensembles: obs (3*N*n_ens,), action (N*n_ens,)
         self.observation_space = spaces.Box(
-            low=-norm_factor, high=norm_factor,
-            shape=(3 * self.N * self.n_ens,), dtype=np.float32
+            low=-2.0, high=2.0,
+            shape=(4 * self.N * self.n_ens,), dtype=np.float32
         )
         self.action_space = spaces.Box(
-            low=-norm_factor, high=norm_factor,
+            low=-2.0, high=2.0,
             shape=(self.N * self.n_ens,), dtype=np.float32
         )
+        self.last_reward = -1e10
+        self.curr_reward = 0
+        
+    def get_normed_factor(self):
+        # run 100 iterations of 20 random starting conditions to aggregate 
+        print("Generating normalization factor")
+        results = []
+        for _ in range(20):
+            self.solver.reset(np.random.randn(self.N)*5)
+            results.append(self.solver.run_eakf(100, verbose=True))
+        return {
+            key: np.max([np.max(np.abs(result[key])) for result in results])
+            for key in results[0].keys()
+        }
     
     def _get_observation(self):
         """Get observation for RL agent."""
         # Get data from solver
-        xa = self.solver.xa
+        xa = self.solver.xa / self.norm_factors["analysis_states"]
         step_results = self.solver.step(custom_kalman_func=None)
-        xb = step_results["background_ensemble"]
-        derivs = step_results["derivatives"]
-        self.ground_truth = step_results["analysis_ensemble"]
-        obs = np.concatenate([xa.flatten(), xb.flatten(), derivs.flatten()]) / self.norm_factor
+        xb = step_results["background_ensemble"] / self.norm_factors["background_states"]
+        xo = step_results["ensemble_observation"] / self.norm_factors["observations"]
+        dx = step_results["derivatives"] / self.norm_factors["derivatives"]
+        self.ground_truth = step_results["analysis_ensemble"] / self.norm_factors["analysis_states"]
+        obs = np.concatenate([xa.flatten(), xb.flatten(), xo.flatten(), dx.flatten()])
         return obs.astype(np.float32)
     
     def step(self, action):
         """Environment step with custom Kalman function from RL agent."""
-        analysis_ensemble = (action * self.norm_factor).reshape(self.N, self.n_ens)
+        analysis_ensemble = action.reshape(self.N, self.n_ens)
         rmse = np.sqrt(np.mean((self.ground_truth - analysis_ensemble) ** 2))
         reward = -rmse
-        
+        self.curr_reward += reward
+        analysis_combined = (self.ground_truth * (1-self.alpha) + analysis_ensemble * self.alpha) * self.norm_factors["analysis_states"]
+        self.solver.xa = analysis_combined
+        self.solver.analysis_states[-1] =  analysis_combined
         self.current_step += 1
         done = self.current_step >= self.n_steps
+        
+        # Visualize episode if done and visualization is enabled
+        if done:
+            # update alpha, increase if model performs better, decrease otherwise
+            self.curr_reward /= self.current_step
+            if self.curr_reward > self.last_reward:
+                self.alpha += 1/1000 # alpha = 1 at the end of training
+                self.alpha = min(self.alpha, 1)
+            else:
+                self.alpha -= 1/100
+                self.alpha = max(self.alpha, 0)
+            self.last_reward = self.curr_reward
+            self.curr_reward = 0
+            # (experimental) visualization
+            if self.visualize_episodes and self.viz_save_path and self.current_ep%10 == 0:
+                title_suffix = f" - Episode {self.current_ep}"
+                save_path = os.path.join(self.viz_save_path, f"episode_{self.current_ep:04d}.png")
+                self.solver.visualize(save_path=save_path, title_suffix=title_suffix)
         
         # Get next observation
         next_obs = self._get_observation()
         
         return next_obs, reward, done, done, {'rmse': rmse, 'step': self.current_step}
     
-    def reset(self, seed=None):
+    def reset(self, seed=None, initial_condition=None):
         """Reset environment."""
         super().reset(seed=seed)
+        self.current_ep += 1
+        self.current_step = 0
         # Reset solver
         if self.fixed_initial_condition:
             self.solver.reset(None)
         else:
-            self.solver.reset(np.random.randn(self.N))
-        self.current_step = 0
+            if initial_condition is None:
+                initial_condition = np.random.randn(self.N)*5
+            self.solver.reset(initial_condition)
         self.solver.step() # Perform initial solver step to populate data
         return self._get_observation(), {}
 
@@ -78,16 +136,21 @@ class ZeroInitEvalEnv(EAKF_RL_Env):
     
     def reset(self, seed=None):
         """Reset environment with zero initial conditions."""
-        super().reset(seed=seed)
-        
         # Always use zero initial conditions for evaluation
-        zero_ic = np.zeros(self.N)
-        self.solver.reset(zero_ic)
+        self.fixed_initial_condition = False
+        return super().reset(seed=seed, initial_condition=np.zeros(self.N)+5.0)
+    
+    def step(self, action):
+        """Override step to use eval-specific visualization."""
+        next_obs, reward, done, truncated, info = super().step(action)
         
-        self.current_step = 0
-        self.solver.step()  # Perform initial solver step to populate data
+        # Visualize eval episode if done and visualization is enabled
+        if done and self.visualize_episodes and self.viz_save_path:
+            title_suffix = f" - Eval Episode {self.current_ep}"
+            save_path = os.path.join(self.viz_save_path, f"eval_episode_{self.current_ep:04d}.png")
+            self.solver.visualize(save_path=save_path, title_suffix=title_suffix)
         
-        return self._get_observation(), {}
+        return next_obs, reward, done, truncated, info
 
 def load_config(config_path):
     """Load configuration from Python file."""
@@ -101,10 +164,11 @@ def create_vectorized_env(config, n_envs=4):
     def make_env():
         env = EAKF_RL_Env(
             solver=config["solver"],
-            norm_factor=config["norm_factor"],
             n_steps=config["n_steps"],
             device=config["device"],
-            fixed_initial_condition=config["fixed_initial_conditions"]
+            fixed_initial_condition=config["fixed_initial_conditions"],
+            visualize_episodes=config.get("visualize_training", False),
+            viz_save_path=config.get("viz_save_path")
         )
         return Monitor(env)
     
@@ -114,10 +178,11 @@ def create_eval_env(config):
     """Create evaluation environment with zero initial conditions."""
     eval_env = ZeroInitEvalEnv(
         solver=config["solver"],
-        norm_factor=config["norm_factor"],
         n_steps=config["eval_n_steps"],
         device=config["device"],
-        fixed_initial_condition=True
+        fixed_initial_condition=True,
+        visualize_episodes=config.get("visualize_eval", False),
+        viz_save_path=config.get("viz_save_path")
     )
     return Monitor(eval_env)
 
@@ -154,6 +219,8 @@ def train_from_config(config):
     # Create directories
     os.makedirs(config["save_path"], exist_ok=True)
     os.makedirs(config["tensorboard_log"], exist_ok=True)
+    if config.get("viz_save_path"):
+        os.makedirs(config["viz_save_path"], exist_ok=True)
     
     # Create evaluation environment
     eval_env = create_eval_env(config)
@@ -169,10 +236,11 @@ def train_from_config(config):
         # Single environment
         env = EAKF_RL_Env(
             solver=config["solver"],
-            norm_factor=config["norm_factor"],
             n_steps=config["n_steps"],
             device=config["device"],
-            fixed_initial_condition=config["fixed_initial_conditions"]
+            fixed_initial_condition=config["fixed_initial_conditions"],
+            visualize_episodes=config.get("visualize_training", False),
+            viz_save_path=config.get("viz_save_path")
         )
         env = Monitor(env)
     

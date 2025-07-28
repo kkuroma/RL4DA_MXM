@@ -59,6 +59,7 @@ class L63:
             numpy.ndarray: Derivative vector [dx/dt, dy/dt, dz/dt]
         """
         x, y, z = state
+        # print(x,y,z,self.rho,self.sigma,self.beta)
         dxdt = self.sigma * (y - x)
         dydt = x * (self.rho - z) - y
         dzdt = x * y - self.beta * z

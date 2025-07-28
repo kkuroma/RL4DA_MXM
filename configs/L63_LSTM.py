@@ -13,7 +13,7 @@ from models.l63 import L63
 def create_solver():
     # L63 parameters
     l63_params = {"sigma": 10.0, "rho": 28.0, "beta": 8.0/3.0}
-    initial_conditions = np.array([20.0, 30.0, 0.0])
+    initial_conditions = np.array([5, 5, 5]) # (this is randomized later)
     num_ensembles = 20  # Full ensemble size
     
     # EAKF setup
@@ -30,7 +30,7 @@ def create_solver():
         num_ensembles=num_ensembles,
         H=H, R=R, dtda=dtda, oda=oda,
         noise_strength=1.0,
-        inflation=1.50,
+        inflation=1.5,
         use_solver_ivp=False
     )
     
@@ -41,7 +41,6 @@ config = {
     "solver": create_solver(),
     
     # RL Environment configuration
-    "norm_factor": 60.0,
     "n_steps": 1000,
     "device": "cpu",
     "fixed_initial_conditions": False,
@@ -49,7 +48,7 @@ config = {
     # Agent configuration
     "agent_type": "custom_lstm",  # "mlp", "lstm", or "custom_lstm"
     "agent_kwargs": {
-        "learning_rate": 3e-4,
+        "learning_rate": 5e-5,
         "lstm_hidden_size": 64,
         "num_lstm_layers": 2,
     },
@@ -58,7 +57,7 @@ config = {
     "total_timesteps": 4000000,
     
     # Evaluation configuration
-    "eval_freq": 2500,
+    "eval_freq": 10000,
     "eval_episodes": 1,
     "eval_initial_condition": np.array([0.0, 0.0, 0.0]),  # Zero vector for evaluation
     "eval_n_steps": 1000,
@@ -73,5 +72,10 @@ config = {
     "save_best": True,   # Save best model based on eval reward
     
     # Vectorized environment configuration
-    "n_envs": 4,  # Number of parallel environments
+    "n_envs": 1,  # Number of parallel environments
+    
+    # Visualization configuration
+    "visualize_training": False,   # Enable training episode visualization
+    "visualize_eval": False,       # Enable evaluation episode visualization
+    "viz_save_path": "./logs/L63_LSTM/visualizations/",  # Path to save visualizations
 }
