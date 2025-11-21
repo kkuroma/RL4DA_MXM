@@ -59,14 +59,14 @@ class EAKFSolver:
         self._ensemble_models = []
         for _ in range(num_ensembles):
             if isinstance(model_params, dict):
-                model = model_class(params=model_params, dt=dtda, use_solve_ivp=use_solver_ivp)
+                model = model_class(model_params, dtda, use_solver_ivp)
             else:
                 model = model_class(*model_params, dtda, use_solver_ivp)
             self._ensemble_models.append(model)
-
+        
         # Create single model for derivatives computation
         if isinstance(model_params, dict):
-            self._derivative_model = model_class(params=model_params, dt=dtda, use_solve_ivp=use_solver_ivp)
+            self._derivative_model = model_class(model_params, dtda, use_solver_ivp)
         else:
             self._derivative_model = model_class(*model_params, dtda, use_solver_ivp)
             
@@ -106,7 +106,7 @@ class EAKFSolver:
         # Initialize true model (reuse existing instance)
         if not hasattr(self, 'true_model'):
             if isinstance(self.model_params, dict):
-                self.true_model = self.model_class(params=self.model_params, dt=self.dtda, use_solve_ivp=self.use_solver_ivp)
+                self.true_model = self.model_class(self.model_params, self.dtda, self.use_solver_ivp)
             else:
                 self.true_model = self.model_class(*self.model_params, self.dtda, self.use_solver_ivp)
         

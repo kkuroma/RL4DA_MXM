@@ -1,0 +1,439 @@
+import os
+import sys
+import argparse
+from pathlib import Path
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+from tqdm import tqdm
+
+from tensordict import TensorDict
+from tensordict.nn import TensorDictModule
+from torchrl.modules import ProbabilisticActor, ValueOperator
+from torchrl.objectives import ClipPPOLoss
+from torchrl.objectives.value import GAE
+from torchrl.data import TensorDictReplayBuffer, LazyTensorStorage
+from torchrl.collectors import SyncDataCollector
+from torchrl.envs import TransformedEnv, InitTracker, StepCounter
+from torch.distributions import Normal
+from torch.utils.tensorboard import SummaryWriter
+
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root / "src"))
+
+from rl.torchrl_env import TorchRLMultiAgentEnkfEnv
+
+
+class TanhNormal(Normal):
+    """Normal distribution with tanh squashing to bounded range."""
+    def __init__(self, loc, scale, low=-1.0, high=1.0):
+        super().__init__(loc, scale)
+        self.low = low
+        self.high = high
+
+    def sample(self, sample_shape=torch.Size()):
+        x = super().sample(sample_shape)
+        return torch.tanh(x) * (self.high - self.low) / 2 + (self.high + self.low) / 2
+
+    def rsample(self, sample_shape=torch.Size()):
+        x = super().rsample(sample_shape)
+        return torch.tanh(x) * (self.high - self.low) / 2 + (self.high + self.low) / 2
+
+
+class MLPPolicy(nn.Module):
+    """MLP policy network."""
+    def __init__(self, obs_dim, action_dim, hidden_sizes, activation):
+        super().__init__()
+        layers = []
+        in_dim = obs_dim
+        for hidden_dim in hidden_sizes:
+            layers.extend([nn.Linear(in_dim, hidden_dim), activation()])
+            in_dim = hidden_dim
+        self.backbone = nn.Sequential(*layers)
+        self.mean_layer = nn.Linear(in_dim, action_dim)
+        self.log_std_layer = nn.Linear(in_dim, action_dim)
+
+    def forward(self, observation):
+        features = self.backbone(observation)
+        mean = self.mean_layer(features)
+        log_std = self.log_std_layer(features)
+        std = F.softplus(log_std) + 1e-4
+        return mean, std
+
+
+class LSTMPolicy(nn.Module):
+    """LSTM policy network."""
+    def __init__(self, obs_dim, action_dim, hidden_sizes, lstm_hidden_size, lstm_num_layers, activation):
+        super().__init__()
+        self.lstm = nn.LSTM(obs_dim, lstm_hidden_size, lstm_num_layers, batch_first=True)
+        layers = []
+        in_dim = lstm_hidden_size
+        for hidden_dim in hidden_sizes:
+            layers.extend([nn.Linear(in_dim, hidden_dim), activation()])
+            in_dim = hidden_dim
+        self.mlp = nn.Sequential(*layers)
+        self.mean_layer = nn.Linear(in_dim, action_dim)
+        self.log_std_layer = nn.Linear(in_dim, action_dim)
+
+    def forward(self, observation):
+        if observation.dim() == 2:
+            observation = observation.unsqueeze(1)
+        lstm_out, _ = self.lstm(observation)
+        features = self.mlp(lstm_out[:, -1, :])
+        mean = self.mean_layer(features)
+        log_std = self.log_std_layer(features)
+        std = F.softplus(log_std) + 1e-4
+        return mean, std
+
+
+class MLPValue(nn.Module):
+    """MLP value network."""
+    def __init__(self, obs_dim, hidden_sizes, activation, num_agents):
+        super().__init__()
+        layers = []
+        in_dim = obs_dim
+        for hidden_dim in hidden_sizes:
+            layers.extend([nn.Linear(in_dim, hidden_dim), activation()])
+            in_dim = hidden_dim
+        layers.append(nn.Linear(in_dim, num_agents))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, observation):
+        return self.net(observation)
+
+
+def load_config(dir_path):
+    """Load configuration from directory."""
+    config_path = Path(dir_path) / "config.py"
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("config", config_path)
+    config_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(config_module)
+    return config_module.config
+
+
+def create_policy_network(config, obs_dim, action_dim, device):
+    """Create policy network based on config."""
+    agent_config = config["agent"]
+    activation = getattr(nn, agent_config["activation"])
+
+    if agent_config["type"] == "MLP":
+        policy = MLPPolicy(
+            obs_dim, action_dim,
+            agent_config["hidden_sizes"],
+            activation
+        )
+    elif agent_config["type"] == "LSTM":
+        policy = LSTMPolicy(
+            obs_dim, action_dim,
+            agent_config["hidden_sizes"],
+            agent_config["lstm_hidden_size"],
+            agent_config["lstm_num_layers"],
+            activation
+        )
+    else:
+        raise ValueError(f"Unknown agent type: {agent_config['type']}")
+
+    return policy.to(device)
+
+
+def create_value_network(config, obs_dim, num_agents, device):
+    """Create value network."""
+    agent_config = config["agent"]
+    activation = getattr(nn, agent_config["activation"])
+    value = MLPValue(obs_dim, agent_config["hidden_sizes"], activation, num_agents)
+    return value.to(device)
+
+
+def create_policy_module(policy_net, action_spec, device):
+    """Wrap policy network in TorchRL modules."""
+    policy_module = TensorDictModule(
+        policy_net,
+        in_keys=["observation"],
+        out_keys=["loc", "scale"]
+    )
+
+    policy_module = ProbabilisticActor(
+        module=policy_module,
+        spec=action_spec,
+        in_keys=["loc", "scale"],
+        out_keys=["action"],
+        distribution_class=TanhNormal,
+        distribution_kwargs={"low": -1.0, "high": 1.0},
+        return_log_prob=True,
+        log_prob_key="sample_log_prob"
+    )
+
+    return policy_module
+
+
+def setup_training(config, env, device):
+    """Initialize all training components."""
+    num_agents = env.num_agents
+    obs_dim = env.obs_dim_per_agent
+    action_dim = env.action_dim_per_agent
+
+    total_obs_dim = num_agents * obs_dim
+    total_action_dim = num_agents * action_dim
+
+    policy_net = create_policy_network(config, total_obs_dim, action_dim, device)
+    value_net = create_value_network(config, total_obs_dim, 1, device)
+
+    def policy_wrapper(observation):
+        # Input: [batch, n_agents, obs_dim_per_agent]
+        # Need: [batch, total_obs_dim] for policy net
+        batch_shape = observation.shape[:-2]
+        obs_flat = observation.reshape(*batch_shape, -1)  # Flatten all agent obs
+        loc, scale = policy_net(obs_flat)  # Output: [batch, action_dim]
+        # Reshape to per-agent actions
+        loc = loc.unsqueeze(-2).expand(*batch_shape, num_agents, action_dim)
+        scale = scale.unsqueeze(-2).expand(*batch_shape, num_agents, action_dim)
+        return loc, scale
+
+    policy_module = TensorDictModule(
+        policy_wrapper,
+        in_keys=["observation"],
+        out_keys=["loc", "scale"]
+    )
+
+    policy_module = ProbabilisticActor(
+        module=policy_module,
+        spec=env.action_spec,
+        in_keys=["loc", "scale"],
+        out_keys=["action"],
+        distribution_class=TanhNormal,
+        distribution_kwargs={"low": -1.0, "high": 1.0},
+        return_log_prob=True,
+        log_prob_key="sample_log_prob"
+    )
+
+    def value_wrapper(observation):
+        # During collection: [batch, n_agents, obs_dim]
+        # During training: [batch*n_agents, obs_dim] after flattening
+        if observation.dim() == 3:  # Collection phase
+            batch_shape = observation.shape[:-2]
+            obs_flat = observation.reshape(*batch_shape, -1)
+            values = value_net(obs_flat)
+            return values.reshape(*batch_shape, num_agents, 1)
+        else:  # Training phase (flattened)
+            values = value_net(observation)
+            return values.reshape(-1, 1)
+
+    value_module = ValueOperator(
+        module=value_wrapper,
+        in_keys=["observation"]
+    )
+
+    train_cfg = config["training"]
+
+    advantage_module = GAE(
+        gamma=train_cfg["gamma"],
+        lmbda=train_cfg["gae_lambda"],
+        value_network=value_module,
+        average_gae=True
+    )
+
+    loss_module = ClipPPOLoss(
+        actor_network=policy_module,
+        critic_network=value_module,
+        clip_epsilon=train_cfg["clip_epsilon"],
+        entropy_bonus=True,
+        entropy_coeff=train_cfg["entropy_coef"],
+        critic_coeff=train_cfg["critic_coef"],
+        loss_critic_type="smooth_l1",
+        normalize_advantage=False
+    )
+
+    params = list(policy_net.parameters()) + list(value_net.parameters())
+    optimizer = torch.optim.Adam(params, lr=train_cfg["lr"])
+
+    return policy_module, value_module, loss_module, optimizer, advantage_module, policy_net, value_net
+
+
+def evaluate(env, policy, device, num_episodes=1):
+    """Run evaluation episodes."""
+    policy.eval()
+    total_rewards = []
+
+    with torch.no_grad():
+        for _ in range(num_episodes):
+            td = env.reset()
+            episode_reward = 0
+            done = False
+
+            while not done:
+                td = policy(td)
+                td = env.step(td)
+                episode_reward += td["reward"].sum().item()
+                done = td["done"].item()
+
+            total_rewards.append(episode_reward)
+
+    policy.train()
+    return {
+        "mean_reward": np.mean(total_rewards),
+        "std_reward": np.std(total_rewards)
+    }
+
+
+def train(dir_path):
+    """Main training loop."""
+    dir_path = Path(dir_path)
+    config = load_config(dir_path)
+
+    device = torch.device(config["device"])
+    train_cfg = config["training"]
+
+    checkpoint_dir = dir_path / "checkpoints"
+    tensorboard_dir = dir_path / "tensorboard"
+    checkpoint_dir.mkdir(exist_ok=True)
+    tensorboard_dir.mkdir(exist_ok=True)
+
+    writer = SummaryWriter(log_dir=str(tensorboard_dir))
+
+    train_env = TransformedEnv(
+        TorchRLMultiAgentEnkfEnv(str(dir_path), is_eval=False, device=device)
+    )
+    train_env.append_transform(InitTracker())
+    train_env.append_transform(StepCounter(max_steps=config["max_episode_length"]))
+
+    eval_env = TransformedEnv(
+        TorchRLMultiAgentEnkfEnv(str(dir_path), is_eval=True, device=device)
+    )
+    eval_env.append_transform(InitTracker())
+    eval_env.append_transform(StepCounter(max_steps=config["max_episode_length"]))
+
+    policy_module, value_module, loss_module, optimizer, advantage_module, policy_net, value_net = setup_training(
+        config, train_env, device
+    )
+
+    collector = SyncDataCollector(
+        train_env,
+        policy_module,
+        frames_per_batch=train_cfg["frames_per_batch"],
+        total_frames=train_cfg["total_frames"],
+        device=device,
+        storing_device=device,
+        max_frames_per_traj=-1
+    )
+
+    replay_buffer = TensorDictReplayBuffer(
+        storage=LazyTensorStorage(train_cfg["frames_per_batch"]),
+        batch_size=train_cfg["sgd_minibatch_size"]
+    )
+
+    best_eval_reward = -float('inf')
+    total_frames = 0
+
+    pbar = tqdm(total=train_cfg["total_frames"], desc="Training", unit="frames")
+
+    for batch_idx, tensordict_data in enumerate(collector):
+        total_frames += tensordict_data.numel()
+
+        with torch.no_grad():
+            advantage_module(tensordict_data)
+
+        # Flatten agent dimension into batch for training
+        # From [batch, n_agents, ...] to [batch*n_agents, ...]
+        batch_size = tensordict_data.shape[0]
+        num_agents = tensordict_data["observation"].shape[1]
+
+        data_flat = TensorDict({}, batch_size=torch.Size([batch_size * num_agents]))
+        for key in tensordict_data.keys(True, True):
+            tensor = tensordict_data[key]
+            if tensor.shape[:2] == (batch_size, num_agents):
+                # Flatten [batch, n_agents, ...] -> [batch*n_agents, ...]
+                new_shape = (batch_size * num_agents,) + tensor.shape[2:]
+                data_flat[key] = tensor.reshape(new_shape)
+            else:
+                # Keep as is (shouldn't happen in our case)
+                data_flat[key] = tensor
+
+        data_view = data_flat
+
+        for epoch in range(train_cfg["num_sgd_iter"]):
+            replay_buffer.empty()
+            replay_buffer.extend(data_view)
+
+            num_minibatches = len(data_view) // train_cfg["sgd_minibatch_size"]
+
+            for _ in range(num_minibatches):
+                subdata = replay_buffer.sample().to(device)
+                loss_vals = loss_module(subdata)
+
+                loss_value = (
+                    loss_vals["loss_objective"].mean() +
+                    loss_vals["loss_critic"].mean() +
+                    loss_vals["loss_entropy"].mean()
+                )
+
+                optimizer.zero_grad()
+                loss_value.backward()
+                params = list(policy_net.parameters()) + list(value_net.parameters())
+                torch.nn.utils.clip_grad_norm_(params, train_cfg["max_grad_norm"])
+                optimizer.step()
+
+        mean_reward = tensordict_data["next", "reward"].sum(dim=-1).mean().item()
+
+        writer.add_scalar("train/reward", mean_reward, total_frames)
+        writer.add_scalar("train/loss_total", loss_value.item(), total_frames)
+        writer.add_scalar("train/loss_policy", loss_vals["loss_objective"].item(), total_frames)
+        writer.add_scalar("train/loss_critic", loss_vals["loss_critic"].item(), total_frames)
+        writer.add_scalar("train/loss_entropy", loss_vals["loss_entropy"].item(), total_frames)
+
+        pbar.update(tensordict_data.numel())
+        pbar.set_postfix({
+            "reward": f"{mean_reward:.4f}",
+            "loss": f"{loss_value.item():.4f}"
+        })
+
+        if total_frames % train_cfg["checkpoint_interval"] == 0:
+            checkpoint_path = checkpoint_dir / f"checkpoint_{total_frames}.pt"
+            torch.save({
+                "total_frames": total_frames,
+                "policy_state_dict": policy_module.state_dict(),
+                "value_state_dict": value_module.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+            }, checkpoint_path)
+            print(f"Checkpoint saved: {checkpoint_path}")
+
+        if total_frames % train_cfg["eval_interval"] == 0:
+            eval_results = evaluate(eval_env, policy_module, device)
+            eval_reward = eval_results["mean_reward"]
+
+            writer.add_scalar("eval/reward", eval_reward, total_frames)
+            print(f"Eval Reward: {eval_reward:.4f}")
+
+            if eval_reward > best_eval_reward:
+                best_eval_reward = eval_reward
+                best_weights_path = dir_path / "best_weights.pt"
+                torch.save({
+                    "total_frames": total_frames,
+                    "policy_state_dict": policy_module.state_dict(),
+                    "value_state_dict": value_module.state_dict(),
+                    "eval_reward": eval_reward,
+                }, best_weights_path)
+                print(f"New best model saved: {best_weights_path} (reward: {eval_reward:.4f})")
+
+    pbar.close()
+
+    final_checkpoint = checkpoint_dir / "final_model.pt"
+    torch.save({
+        "total_frames": total_frames,
+        "policy_state_dict": policy_module.state_dict(),
+        "value_state_dict": value_module.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+    }, final_checkpoint)
+    print(f"Training complete. Final model saved: {final_checkpoint}")
+
+    writer.close()
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dir", type=str, required=True, help="Path to logs directory")
+    args = parser.parse_args()
+
+    train(args.dir)
